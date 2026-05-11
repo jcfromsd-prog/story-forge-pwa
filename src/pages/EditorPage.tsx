@@ -295,7 +295,11 @@ export default function EditorPage() {
         className="flex-shrink-0 bg-ink-900/30"
         style={{ width: chatWidth }}
       >
-        <ChatPanel selectedPassage={selectedText} onClearSelection={() => setSelectedText('')} />
+        <ChatPanel
+          selectedPassage={selectedText}
+          manuscriptContent={content}
+          onClearSelection={() => setSelectedText('')}
+        />
       </div>
     </div>
   )

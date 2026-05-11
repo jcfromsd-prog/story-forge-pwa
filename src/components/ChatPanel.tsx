@@ -8,6 +8,7 @@ import type { Message } from '@/types'
 
 interface ChatPanelProps {
   selectedPassage?: string
+  manuscriptContent?: string
   onClearSelection?: () => void
 }
 
@@ -19,7 +20,7 @@ const PRESET_PROMPTS = [
   'Suggest a stronger opening for this chapter',
 ]
 
-export default function ChatPanel({ selectedPassage, onClearSelection }: ChatPanelProps) {
+export default function ChatPanel({ selectedPassage, manuscriptContent, onClearSelection }: ChatPanelProps) {
   const projectId = useApp((s) => s.currentProjectId)
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
@@ -28,6 +29,14 @@ export default function ChatPanel({ selectedPassage, onClearSelection }: ChatPan
   const [recording, setRecording] = useState(false)
   const [interimTranscript, setInterimTranscript] = useState('')
   const [voiceError, setVoiceError] = useState<string | null>(null)
+  const [attachManuscript, setAttachManuscript] = useState<boolean>(() => {
+    return localStorage.getItem('sf:attachManuscript') === '1'
+  })
+
+  const toggleAttachManuscript = (value: boolean) => {
+    setAttachManuscript(value)
+    localStorage.setItem('sf:attachManuscript', value ? '1' : '0')
+  }
   const scrollRef = useRef<HTMLDivElement>(null)
   const captureRef = useRef<VoiceCapture | null>(null)
   const recordingBaseRef = useRef<string>('') // input value when recording started
@@ -99,15 +108,19 @@ export default function ChatPanel({ selectedPassage, onClearSelection }: ChatPan
     setBusy(true)
     if (recordUserMessage) {
       setInput('')
+      const annotations: string[] = []
+      if (passage) annotations.push('[Selected passage attached]')
+      if (attachManuscript && manuscriptContent) annotations.push('[Manuscript attached]')
       await Chat.addMessage({
         conversationId,
         role: 'user',
-        content: passage ? `${text}\n\n[Selected passage attached]` : text,
+        content: annotations.length ? `${text}\n\n${annotations.join(' ')}` : text,
       })
       await reloadMessages(conversationId)
     }
     try {
-      const { raw, parsed } = await runCraftAgent(projectId, text, passage)
+      const manuscriptToSend = attachManuscript ? manuscriptContent : undefined
+      const { raw, parsed } = await runCraftAgent(projectId, text, passage, manuscriptToSend)
       const display = parsed && (parsed as { options?: unknown }).options ? formatCraftResponse(parsed) : raw
       await Chat.addMessage({
         conversationId,
@@ -116,10 +129,24 @@ export default function ChatPanel({ selectedPassage, onClearSelection }: ChatPan
         aiModel: 'craft',
       })
     } catch (e) {
+      const errMsg = e instanceof Error ? e.message : String(e)
+      // Pretty-print the most common errors with actionable guidance
+      let friendly = errMsg
+      if (errMsg.includes('429') && errMsg.includes('retry in')) {
+        const match = errMsg.match(/retry in ([\d.]+)s/)
+        const seconds = match ? Math.ceil(Number(match[1])) : 60
+        friendly = `Gemini rate limit hit (free tier: 20 requests/minute). Wait ${seconds} seconds, then click Retry.`
+      } else if (errMsg.includes('429') && errMsg.includes('limit: 0')) {
+        friendly = 'This Gemini model is paid-only. Switch to gemini-2.5-flash, or enable billing on your Google Cloud project.'
+      } else if (errMsg.includes('429') && errMsg.includes('per day')) {
+        friendly = 'Daily free-tier quota exhausted (~250 requests/day). Either wait until midnight UTC, enable Google Cloud billing (cheap), or add an Anthropic API key as fallback.'
+      } else if (errMsg.includes('503')) {
+        friendly = `Gemini servers briefly overloaded after 3 auto-retries. Click Retry in a moment.`
+      }
       await Chat.addMessage({
         conversationId,
         role: 'assistant',
-        content: `⚠️ ${e instanceof Error ? e.message : String(e)}`,
+        content: `⚠️ ${friendly}`,
       })
     } finally {
       await reloadMessages(conversationId)
@@ -145,8 +172,10 @@ export default function ChatPanel({ selectedPassage, onClearSelection }: ChatPan
       }
     }
     if (!lastUser) return
-    // Strip the passage footer if present (user message may include it)
-    const content = lastUser.content.replace(/\n+\[Selected passage attached\]\s*$/, '')
+    // Strip the annotation footers
+    const content = lastUser.content
+      .replace(/\n+\[(Selected passage attached|Manuscript attached|.*?attached)\][\s\[\]a-zA-Z\s]*\s*$/, '')
+      .trim()
     await sendRaw(content, undefined, false)
   }
 
@@ -286,14 +315,30 @@ export default function ChatPanel({ selectedPassage, onClearSelection }: ChatPan
             Voice input needs Chrome/Edge — Safari/Firefox can still type.
           </p>
         )}
-        <div className="mt-2 flex items-center justify-between">
-          <p className="text-[10px] text-ink-500">
-            {recording && interimTranscript ? `…${interimTranscript.slice(-40)}` : '⌘/Ctrl + Enter to send'}
-          </p>
+        <div className="mt-2 flex items-center justify-between gap-2">
+          <label className="flex cursor-pointer items-center gap-1.5 text-[10px] text-ink-400 hover:text-ink-200">
+            <input
+              type="checkbox"
+              checked={attachManuscript}
+              onChange={(e) => toggleAttachManuscript(e.target.checked)}
+              className="h-3 w-3 cursor-pointer"
+            />
+            <span title="Send the manuscript text along with your question so the AI can actually read it. Uses more tokens (~15K per request).">
+              Attach manuscript
+              {attachManuscript && manuscriptContent && (
+                <span className="ml-1 text-accent-500">
+                  · {Math.round(manuscriptContent.length / 1000)}k chars
+                </span>
+              )}
+            </span>
+          </label>
           <button onClick={() => send(input)} className="btn-primary" disabled={!input.trim() || busy}>
             Send
           </button>
         </div>
+        {recording && interimTranscript && (
+          <p className="mt-1 truncate text-[10px] text-ink-500">…{interimTranscript.slice(-60)}</p>
+        )}
       </div>
     </div>
   )

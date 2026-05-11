@@ -50,10 +50,23 @@ export async function runCraftAgent(
   projectId: ID,
   request: string,
   passage?: string,
+  manuscriptContent?: string,
 ): Promise<{ raw: string; parsed: CraftResponse | null }> {
-  const userMessage = passage
-    ? `Selected passage:\n"""\n${passage}\n"""\n\nRequest: ${request}`
-    : request
+  const parts: string[] = []
+  if (manuscriptContent && manuscriptContent.trim().length > 0) {
+    // Trim to ~60K chars (~10-15K tokens) to keep prompts reasonable
+    const excerpt = manuscriptContent.length > 60000
+      ? manuscriptContent.slice(0, 60000) +
+        `\n\n[... manuscript continues — ${(manuscriptContent.length - 60000).toLocaleString()} more characters omitted to fit token limits ...]`
+      : manuscriptContent
+    parts.push(`CURRENT MANUSCRIPT (the work the author wants you to analyze):\n"""\n${excerpt}\n"""\n`)
+  }
+  if (passage && passage.trim().length > 0) {
+    parts.push(`SELECTED PASSAGE (specifically what the author wants you to focus on):\n"""\n${passage}\n"""\n`)
+  }
+  parts.push(`AUTHOR'S REQUEST:\n${request}`)
+  const userMessage = parts.join('\n\n')
+
   const res = await callClaude({
     agent: 'craft',
     projectId,
