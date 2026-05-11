@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useApp } from '@/state/store'
 import { autoSnapshot, getLatestVersion } from '@/lib/versions'
+import { importManuscript } from '@/lib/import'
 import { parseChapters, wordCount, readingMinutes, screenplayPages, relativeTime } from '@/lib/util'
 import ChatPanel from '@/components/ChatPanel'
 
@@ -22,7 +23,10 @@ export default function EditorPage() {
   const [lastSaved, setLastSaved] = useState<number | null>(null)
   const [selectedText, setSelectedText] = useState<string>('')
   const [dirty, setDirty] = useState(false)
+  const [importBusy, setImportBusy] = useState(false)
+  const [importMsg, setImportMsg] = useState<string | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
   const autosaveTimer = useRef<number | null>(null)
 
   useEffect(() => {
@@ -80,6 +84,36 @@ export default function EditorPage() {
     setSelectedText(`Run a "${pass}" revision pass on the selected text. Return 2-3 alternative versions.`)
   }
 
+  const handleImportClick = () => fileInputRef.current?.click()
+
+  const handleImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setImportBusy(true)
+    setImportMsg(null)
+    try {
+      const result = await importManuscript(file)
+      const replace = !content.trim() || content.trim() === '# Chapter 1' || confirm(
+        `This will replace the current manuscript with "${file.name}" (${result.words.toLocaleString()} words, ${result.chapters} chapter${result.chapters === 1 ? '' : 's'} detected). Continue?`,
+      )
+      if (!replace) {
+        setImportBusy(false)
+        return
+      }
+      setContent(result.content)
+      setDirty(true)
+      const warnings = result.warnings.length ? ' · ' + result.warnings.join(' ') : ''
+      setImportMsg(
+        `✓ Imported ${file.name} — ${result.words.toLocaleString()} words, ${result.chapters} chapter${result.chapters === 1 ? '' : 's'}.${warnings} Click "Save snapshot" to commit.`,
+      )
+    } catch (err) {
+      setImportMsg(`Import failed: ${err instanceof Error ? err.message : String(err)}`)
+    } finally {
+      setImportBusy(false)
+      if (fileInputRef.current) fileInputRef.current.value = ''
+    }
+  }
+
   const chapters = parseChapters(content)
   const totalWords = wordCount(content)
 
@@ -97,6 +131,21 @@ export default function EditorPage() {
             <span className="text-ink-400">{chapters.length} chapters</span>
           </div>
           <div className="flex items-center gap-2">
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".docx,.txt,.md,.markdown,.fountain,.fdx"
+              onChange={handleImportFile}
+              className="hidden"
+            />
+            <button
+              onClick={handleImportClick}
+              className="btn-secondary"
+              disabled={importBusy}
+              title="Import a .docx, .txt, .md, or .fountain manuscript file"
+            >
+              {importBusy ? 'Importing…' : '＋ Import file'}
+            </button>
             <select
               onChange={(e) => e.target.value && handleRunPass(e.target.value)}
               defaultValue=""
@@ -117,6 +166,24 @@ export default function EditorPage() {
             </button>
           </div>
         </div>
+
+        {importMsg && (
+          <div
+            className={`border-b px-4 py-2 text-xs ${
+              importMsg.startsWith('✓')
+                ? 'border-green-700 bg-green-900/20 text-green-200'
+                : 'border-red-700 bg-red-900/20 text-red-200'
+            }`}
+          >
+            {importMsg}
+            <button
+              onClick={() => setImportMsg(null)}
+              className="float-right text-ink-500 hover:text-ink-200"
+            >
+              ✕
+            </button>
+          </div>
+        )}
 
         {chapters.length > 0 && (
           <div className="flex items-end gap-px overflow-x-auto border-b border-ink-800 bg-ink-900/20 px-4 py-2">

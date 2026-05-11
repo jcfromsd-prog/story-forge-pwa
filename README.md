@@ -25,7 +25,7 @@ This build includes:
 
 - Frontend: React 18 + Vite + TypeScript + Tailwind + vite-plugin-pwa
 - Backend: Supabase (Postgres + pgvector + Storage + Auth + Edge Functions)
-- AI: Claude Sonnet 4.6 (default) via Supabase Edge Function — never directly from the browser
+- AI: dual-provider — Gemini 2.5 Pro (default, free via student access) with Anthropic Claude Sonnet 4.6 as automatic fallback, via Supabase Edge Function — never directly from the browser
 - Hosting: Vercel
 - Project ID (Supabase): `fpnlcwxmyodpvmmpxksg`
 
@@ -60,13 +60,15 @@ If either is missing, run `gh auth login` or `vercel login` first.
 
 ## One final step (1 minute)
 
-After the deploy, open the live URL. Sign in. Then tell the Edge Function your Anthropic API key:
+After the deploy, open the live URL. Sign in. Then tell the Edge Function your AI provider key. **You can use Gemini (free with student access) or Anthropic, or both**:
 
-1. Open the Supabase dashboard: https://supabase.com/dashboard/project/fpnlcwxmyodpvmmpxksg/settings/functions
-2. Click **Secrets**
-3. Click **New secret**
-4. Name: `ANTHROPIC_API_KEY`, Value: `sk-ant-api03-...` (your real key)
+1. Open the Supabase dashboard: https://supabase.com/dashboard/project/fpnlcwxmyodpvmmpxksg/functions/secrets
+2. Click **Add new secret**
+3. **For Gemini (recommended, free):** Name `GEMINI_API_KEY`, Value: key from https://aistudio.google.com/apikey
+4. **For Anthropic (paid or eval):** Name `ANTHROPIC_API_KEY`, Value: `sk-ant-api03-...`
 5. Click **Save**
+
+If you set both, the Edge Function tries Gemini first and falls back to Anthropic on error.
 
 That's it. Open the app, tap the mic, talk.
 
@@ -92,9 +94,10 @@ Open http://localhost:5173. Same auth, same Supabase backend.
 | Supabase | $0/month (free tier) |
 | GitHub | $0/month (free private repos) |
 | Vercel | $0/month (free hobby tier) |
-| Anthropic API | Pay-per-use (you already have a paid account) |
+| Gemini 2.5 Pro API | $0 with student access |
+| Anthropic API (fallback) | Pay-per-use, optional |
 
-Typical AI cost per session: a few cents to a couple of dollars depending on how heavy you go on Craft Agent calls (Sonnet runs ~$3 per million input tokens, ~$15 per million output).
+If you stick with Gemini as the primary, your total ongoing cost is **$0**. The Anthropic fallback only kicks in if Gemini errors — and only burns credit when it does.
 
 ---
 

@@ -45,7 +45,7 @@ export default function AuthPage() {
             <span className="text-xl font-bold">S</span>
           </div>
           <h1 className="text-xl font-semibold text-ink-100">StoryForge</h1>
-          <p className="mt-1 text-xs text-ink-400">Voice-first writing partner</p>
+          <p className="mt-1 text-xs text-ink-400">Voice-first writing partner · Gemini + Claude</p>
         </div>
 
         <div className="mb-4 flex rounded-md bg-ink-900 p-1 text-xs">
