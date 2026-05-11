@@ -1,9 +1,14 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useCallback } from 'react'
 import { useApp } from '@/state/store'
 import { autoSnapshot, getLatestVersion } from '@/lib/versions'
 import { importManuscript } from '@/lib/import'
 import { parseChapters, wordCount, readingMinutes, screenplayPages, relativeTime } from '@/lib/util'
 import ChatPanel from '@/components/ChatPanel'
+
+const CHAT_WIDTH_KEY = 'sf:chatPanelWidth'
+const DEFAULT_CHAT_WIDTH = 384
+const MIN_CHAT_WIDTH = 280
+const MAX_CHAT_WIDTH = 900
 
 const PASS_TYPES = [
   'Prose Tic Cleanup',
@@ -28,6 +33,44 @@ export default function EditorPage() {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const autosaveTimer = useRef<number | null>(null)
+
+  // Resizable chat panel
+  const [chatWidth, setChatWidth] = useState<number>(() => {
+    const stored = Number(localStorage.getItem(CHAT_WIDTH_KEY))
+    return stored && stored >= MIN_CHAT_WIDTH && stored <= MAX_CHAT_WIDTH ? stored : DEFAULT_CHAT_WIDTH
+  })
+  const [dragging, setDragging] = useState(false)
+  const containerRef = useRef<HTMLDivElement>(null)
+
+  const startResize = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    setDragging(true)
+  }, [])
+
+  useEffect(() => {
+    if (!dragging) return
+    const onMove = (e: MouseEvent) => {
+      if (!containerRef.current) return
+      const rect = containerRef.current.getBoundingClientRect()
+      const newWidth = rect.right - e.clientX
+      const clamped = Math.max(MIN_CHAT_WIDTH, Math.min(MAX_CHAT_WIDTH, newWidth))
+      setChatWidth(clamped)
+    }
+    const onUp = () => {
+      setDragging(false)
+      localStorage.setItem(CHAT_WIDTH_KEY, String(chatWidth))
+    }
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+    return () => {
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+  }, [dragging, chatWidth])
 
   useEffect(() => {
     if (!projectId) {
@@ -118,7 +161,7 @@ export default function EditorPage() {
   const totalWords = wordCount(content)
 
   return (
-    <div className="flex h-full">
+    <div ref={containerRef} className="flex h-full">
       <div className="flex min-w-0 flex-1 flex-col">
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-ink-800 bg-ink-900/40 px-4 py-2 text-xs">
           <div className="flex items-center gap-4">
@@ -230,7 +273,28 @@ export default function EditorPage() {
         </div>
       </div>
 
-      <div className="w-96 flex-shrink-0 border-l border-ink-800 bg-ink-900/30">
+      {/* Drag handle */}
+      <div
+        onMouseDown={startResize}
+        onDoubleClick={() => {
+          setChatWidth(DEFAULT_CHAT_WIDTH)
+          localStorage.setItem(CHAT_WIDTH_KEY, String(DEFAULT_CHAT_WIDTH))
+        }}
+        className={`group relative flex-shrink-0 cursor-col-resize border-l border-r border-ink-800 transition-colors ${
+          dragging ? 'border-accent-500 bg-accent-500/20' : 'hover:bg-accent-500/10'
+        }`}
+        style={{ width: 6 }}
+        title="Drag to resize · double-click to reset"
+      >
+        <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 rounded bg-ink-700 px-0.5 py-3 text-[8px] text-ink-400 opacity-0 group-hover:opacity-100">
+          ⇔
+        </div>
+      </div>
+
+      <div
+        className="flex-shrink-0 bg-ink-900/30"
+        style={{ width: chatWidth }}
+      >
         <ChatPanel selectedPassage={selectedText} onClearSelection={() => setSelectedText('')} />
       </div>
     </div>
