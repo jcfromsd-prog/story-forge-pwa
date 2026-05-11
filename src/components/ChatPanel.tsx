@@ -92,20 +92,22 @@ export default function ChatPanel({ selectedPassage, onClearSelection }: ChatPan
     setInput(recordingBaseRef.current + transcript)
   }
 
-  const send = async (text: string) => {
+  // Internal send that doesn't re-record the user message — used by retry
+  const sendRaw = async (text: string, passage?: string, recordUserMessage = true) => {
     if (!projectId || !conversationId || !text.trim() || busy) return
-    // Stop voice if active before sending
     if (recording) await stopVoice()
     setBusy(true)
-    setInput('')
-    await Chat.addMessage({
-      conversationId,
-      role: 'user',
-      content: selectedPassage ? `${text}\n\n[Selected passage attached]` : text,
-    })
-    await reloadMessages(conversationId)
+    if (recordUserMessage) {
+      setInput('')
+      await Chat.addMessage({
+        conversationId,
+        role: 'user',
+        content: passage ? `${text}\n\n[Selected passage attached]` : text,
+      })
+      await reloadMessages(conversationId)
+    }
     try {
-      const { raw, parsed } = await runCraftAgent(projectId, text, selectedPassage)
+      const { raw, parsed } = await runCraftAgent(projectId, text, passage)
       const display = parsed && (parsed as { options?: unknown }).options ? formatCraftResponse(parsed) : raw
       await Chat.addMessage({
         conversationId,
@@ -124,6 +126,28 @@ export default function ChatPanel({ selectedPassage, onClearSelection }: ChatPan
       setBusy(false)
       onClearSelection?.()
     }
+  }
+
+  const send = (text: string) => sendRaw(text, selectedPassage, true)
+
+  /**
+   * Re-run the most recent user prompt. Strips the "[Selected passage attached]" footer
+   * if it was originally added, and re-extracts the passage when present.
+   */
+  const retryLastPrompt = async () => {
+    if (busy) return
+    // Find the last user message
+    let lastUser: Message | undefined
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === 'user') {
+        lastUser = messages[i]
+        break
+      }
+    }
+    if (!lastUser) return
+    // Strip the passage footer if present (user message may include it)
+    const content = lastUser.content.replace(/\n+\[Selected passage attached\]\s*$/, '')
+    await sendRaw(content, undefined, false)
   }
 
   const speechSupported = isSpeechRecognitionSupported()
@@ -166,22 +190,46 @@ export default function ChatPanel({ selectedPassage, onClearSelection }: ChatPan
             </div>
           </div>
         )}
-        {messages.map((m) => (
-          <div
-            key={m.id}
-            className={clsx(
-              'rounded-lg px-3 py-2 text-sm',
-              m.role === 'user'
-                ? 'ml-6 bg-ink-800 text-ink-100'
-                : 'mr-6 border border-ink-800 bg-ink-900/40 text-ink-200',
-            )}
-          >
-            <div className="mb-1 text-[10px] uppercase tracking-wider text-ink-500">
-              {m.role === 'user' ? 'You' : 'Craft Agent'}
+        {messages.map((m, idx) => {
+          const isError = m.role === 'assistant' && m.content.startsWith('⚠️')
+          // Show retry button on the most recent error
+          const showRetry =
+            isError &&
+            idx === messages.length - 1 &&
+            messages.some((mm) => mm.role === 'user')
+          return (
+            <div
+              key={m.id}
+              className={clsx(
+                'rounded-lg px-3 py-2 text-sm',
+                m.role === 'user'
+                  ? 'ml-6 bg-ink-800 text-ink-100'
+                  : isError
+                    ? 'mr-6 border border-red-700/60 bg-red-900/20 text-red-100'
+                    : 'mr-6 border border-ink-800 bg-ink-900/40 text-ink-200',
+              )}
+            >
+              <div className="mb-1 text-[10px] uppercase tracking-wider text-ink-500">
+                {m.role === 'user' ? 'You' : 'Craft Agent'}
+              </div>
+              <div className="whitespace-pre-wrap leading-relaxed">{m.content}</div>
+              {showRetry && (
+                <div className="mt-2 flex gap-2">
+                  <button
+                    onClick={retryLastPrompt}
+                    disabled={busy}
+                    className="rounded-md border border-accent-500 bg-accent-500/20 px-3 py-1 text-xs font-medium text-accent-500 hover:bg-accent-500 hover:text-ink-950 disabled:opacity-50"
+                  >
+                    ↻ Retry same prompt
+                  </button>
+                  <p className="self-center text-[10px] text-red-300/60">
+                    (Often a transient Gemini overload — usually works on retry.)
+                  </p>
+                </div>
+              )}
             </div>
-            <div className="whitespace-pre-wrap leading-relaxed">{m.content}</div>
-          </div>
-        ))}
+          )
+        })}
         {busy && (
           <div className="mr-6 rounded-lg border border-ink-800 bg-ink-900/40 px-3 py-2 text-sm text-ink-400">
             <span className="inline-flex gap-1">
