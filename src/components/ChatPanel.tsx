@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import { useApp } from '@/state/store'
 import { runCraftAgent } from '@/lib/agents'
 import { Chat } from '@/lib/data'
+import { VoiceCapture, isSpeechRecognitionSupported } from '@/lib/voice'
 import { clsx } from '@/lib/util'
 import type { Message } from '@/types'
 
@@ -24,7 +25,12 @@ export default function ChatPanel({ selectedPassage, onClearSelection }: ChatPan
   const [busy, setBusy] = useState(false)
   const [conversationId, setConversationId] = useState<string | null>(null)
   const [messages, setMessages] = useState<Message[]>([])
+  const [recording, setRecording] = useState(false)
+  const [interimTranscript, setInterimTranscript] = useState('')
+  const [voiceError, setVoiceError] = useState<string | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
+  const captureRef = useRef<VoiceCapture | null>(null)
+  const recordingBaseRef = useRef<string>('') // input value when recording started
 
   useEffect(() => {
     if (!projectId) return
@@ -40,12 +46,56 @@ export default function ChatPanel({ selectedPassage, onClearSelection }: ChatPan
     }
   }, [messages.length, busy])
 
+  // Stop voice capture on unmount
+  useEffect(() => {
+    return () => {
+      if (captureRef.current) void captureRef.current.stop()
+    }
+  }, [])
+
   const reloadMessages = async (cid: string) => {
     setMessages(await Chat.listMessages(cid))
   }
 
+  const startVoice = async () => {
+    if (recording) return
+    setVoiceError(null)
+    recordingBaseRef.current = input ? input.trimEnd() + ' ' : ''
+    const cap = new VoiceCapture(
+      {
+        onPartialTranscript: (interim, finalSoFar) => {
+          setInterimTranscript(interim)
+          setInput(recordingBaseRef.current + finalSoFar + (interim ? ' ' + interim : ''))
+        },
+        onAutoSave: () => {},
+        onError: (err) => setVoiceError(err.message),
+        onEnd: () => {},
+      },
+      30000, // we don't need cloud autosave for chat input
+    )
+    captureRef.current = cap
+    try {
+      await cap.start()
+      setRecording(true)
+    } catch (e) {
+      setVoiceError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  const stopVoice = async () => {
+    if (!captureRef.current) return
+    const { transcript } = await captureRef.current.stop()
+    captureRef.current = null
+    setRecording(false)
+    setInterimTranscript('')
+    // Replace interim text in the input with the finalized transcript
+    setInput(recordingBaseRef.current + transcript)
+  }
+
   const send = async (text: string) => {
     if (!projectId || !conversationId || !text.trim() || busy) return
+    // Stop voice if active before sending
+    if (recording) await stopVoice()
     setBusy(true)
     setInput('')
     await Chat.addMessage({
@@ -56,7 +106,7 @@ export default function ChatPanel({ selectedPassage, onClearSelection }: ChatPan
     await reloadMessages(conversationId)
     try {
       const { raw, parsed } = await runCraftAgent(projectId, text, selectedPassage)
-      const display = parsed ? formatCraftResponse(parsed) : raw
+      const display = parsed && (parsed as { options?: unknown }).options ? formatCraftResponse(parsed) : raw
       await Chat.addMessage({
         conversationId,
         role: 'assistant',
@@ -75,6 +125,8 @@ export default function ChatPanel({ selectedPassage, onClearSelection }: ChatPan
       onClearSelection?.()
     }
   }
+
+  const speechSupported = isSpeechRecognitionSupported()
 
   return (
     <div className="flex h-full flex-col">
@@ -100,7 +152,7 @@ export default function ChatPanel({ selectedPassage, onClearSelection }: ChatPan
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto p-3 space-y-3">
         {messages.length === 0 && !busy && (
           <div className="text-xs text-ink-500">
-            <p className="mb-3">Ask anything. The AI sees your Bible and always returns 2-3 options.</p>
+            <p className="mb-3">Ask anything by typing or 🎤 voice. The AI sees your Bible and always returns 2-3 options.</p>
             <div className="space-y-1">
               {PRESET_PROMPTS.map((p) => (
                 <button
@@ -142,21 +194,54 @@ export default function ChatPanel({ selectedPassage, onClearSelection }: ChatPan
       </div>
 
       <div className="border-t border-ink-800 p-3">
-        <textarea
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-              e.preventDefault()
-              send(input)
+        <div className="relative">
+          <textarea
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                e.preventDefault()
+                send(input)
+              }
+            }}
+            placeholder={
+              recording
+                ? '🔴 Recording — speak naturally. Click the mic again to stop.'
+                : 'Type or tap the mic to speak... (Cmd/Ctrl+Enter to send)'
             }
-          }}
-          placeholder="Ask the Craft Agent... (Cmd/Ctrl+Enter to send)"
-          rows={3}
-          className="input resize-none"
-        />
+            rows={3}
+            className="input resize-none pr-12"
+            readOnly={recording}
+          />
+          {speechSupported && (
+            <button
+              type="button"
+              onClick={recording ? stopVoice : startVoice}
+              className={clsx(
+                'absolute right-2 top-2 flex h-8 w-8 items-center justify-center rounded-full border transition',
+                recording
+                  ? 'border-red-500 bg-red-500/20 text-red-400 recording-pulse'
+                  : 'border-ink-700 bg-ink-900 text-ink-300 hover:border-accent-500 hover:text-accent-500',
+              )}
+              title={recording ? 'Stop recording' : 'Tap to dictate'}
+              aria-label={recording ? 'Stop recording' : 'Start voice dictation'}
+            >
+              {recording ? '■' : '🎤'}
+            </button>
+          )}
+        </div>
+        {voiceError && (
+          <p className="mt-1 text-[10px] text-red-400">⚠ {voiceError}</p>
+        )}
+        {!speechSupported && (
+          <p className="mt-1 text-[10px] text-ink-500">
+            Voice input needs Chrome/Edge — Safari/Firefox can still type.
+          </p>
+        )}
         <div className="mt-2 flex items-center justify-between">
-          <p className="text-[10px] text-ink-500">⌘/Ctrl + Enter to send</p>
+          <p className="text-[10px] text-ink-500">
+            {recording && interimTranscript ? `…${interimTranscript.slice(-40)}` : '⌘/Ctrl + Enter to send'}
+          </p>
           <button onClick={() => send(input)} className="btn-primary" disabled={!input.trim() || busy}>
             Send
           </button>
@@ -167,8 +252,8 @@ export default function ChatPanel({ selectedPassage, onClearSelection }: ChatPan
 }
 
 function formatCraftResponse(parsed: {
-  analysis: string
-  options: { label: string; text: string; tradeoff: string }[]
+  analysis?: string
+  options?: { label: string; text: string; tradeoff: string }[]
   literary_techniques_in_play?: string[]
   bible_violations?: string[]
 }): string {
